@@ -1,0 +1,2 @@
+# URL-SCOOOP
+DL用URLを入れることで一括でcivitaiからmodelをDLすることができます。
