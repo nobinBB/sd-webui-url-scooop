@@ -16,8 +16,26 @@ def get_filename_from_cd(cd_header):
     m = re.search(r'filename="?([^";]+)"?', cd_header)
     return m.group(1) if m else None
 
+def convert_civitai_url(url):
+    """CivitAIのモデルページURLをダウンロードAPIのURLに変換"""
+    # CivitAI モデルページのURLパターンをチェック
+    # 例: https://civitai.com/models/1075693?modelVersionId=1207569
+    # 例: https://civitai.com/models/1075693/model-name?modelVersionId=1207569
+    
+    civitai_pattern = r'https://civitai\.com/models/\d+.*?modelVersionId=(\d+)'
+    match = re.search(civitai_pattern, url)
+    
+    if match:
+        model_version_id = match.group(1)
+        # ダウンロードAPIのURLに変換
+        download_url = f"https://civitai.com/api/download/models/{model_version_id}"
+        return download_url
+    
+    # CivitAIのURLでない場合、または既にAPIのURLの場合はそのまま返す
+    return url
+
 def read_urls(txt_file, url_text):
-    """ファイルまたはテキストからURLリストを取得"""
+    """ファイルまたはテキストからURLリストを取得し、CivitAIのURLを変換"""
     urls = []
     if txt_file:
         # Gradio の UploadedFile は .name にローカルパスを持つ
@@ -27,7 +45,14 @@ def read_urls(txt_file, url_text):
                 urls += [ln.strip() for ln in f if ln.strip()]
     if url_text:
         urls += [ln.strip() for ln in url_text.splitlines() if ln.strip()]
-    return urls
+    
+    # CivitAIのURLを変換
+    converted_urls = []
+    for url in urls:
+        converted_url = convert_civitai_url(url)
+        converted_urls.append(converted_url)
+    
+    return converted_urls
 
 def get_civitai_api_key():
     """設定 or 環境変数から API キーを取得"""
@@ -56,6 +81,18 @@ def format_duration(seconds):
 # --- ダウンロード処理 ---
 def batch_download(txt_file, url_text, dest_dir, skip_existing=True, retry_count=3, delay_between_requests=1, progress=gr.Progress()):
     start_time = time.time()
+    original_urls = []
+    
+    # 元のURLリストを取得（変換前）
+    if txt_file:
+        path = getattr(txt_file, 'name', None)
+        if path and os.path.isfile(path):
+            with open(path, encoding='utf-8') as f:
+                original_urls += [ln.strip() for ln in f if ln.strip()]
+    if url_text:
+        original_urls += [ln.strip() for ln in url_text.splitlines() if ln.strip()]
+    
+    # URLを変換
     urls = read_urls(txt_file, url_text)
     
     if not urls:
@@ -68,6 +105,12 @@ def batch_download(txt_file, url_text, dest_dir, skip_existing=True, retry_count
     api_key = get_civitai_api_key()
     headers = {'Authorization': f'Bearer {api_key}'} if api_key else {}
     
+    # URL変換情報をログに出力
+    url_conversions = []
+    for i, (original, converted) in enumerate(zip(original_urls, urls)):
+        if original != converted:
+            url_conversions.append(f'[{i+1:03d}] {original} → {converted}')
+    
     logs = [
         f'=== ダウンロード開始 ===',
         f'開始時刻: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}',
@@ -79,6 +122,12 @@ def batch_download(txt_file, url_text, dest_dir, skip_existing=True, retry_count
         f'リクエスト間隔: {delay_between_requests}秒',
         ''
     ]
+    
+    # URL変換情報があれば表示
+    if url_conversions:
+        logs.extend(['=== CivitAI URL変換 ==='])
+        logs.extend(url_conversions)
+        logs.append('')
 
     success_count = 0
     skip_count = 0
@@ -292,9 +341,14 @@ def batch_download(txt_file, url_text, dest_dir, skip_existing=True, retry_count
 def ui():
     with gr.Blocks(analytics_enabled=False) as demo:
         gr.Markdown('## URL Scooop: 一括ダウンロード')
+        gr.Markdown('### CivitAI対応: モデルページのURLを自動的にダウンロードAPIのURLに変換します')
         with gr.Row():
             txt_file = gr.File(label='URLリスト(.txt)', file_types=['.txt'])
-            url_text = gr.Textbox(label='URLリスト(改行区切り)', lines=4)
+            url_text = gr.Textbox(
+                label='URLリスト(改行区切り) - CivitAIのモデルページURLを貼ってください', 
+                lines=4,
+                placeholder='例: https://civitai.com/models/1075693?modelVersionId=1207569'
+            )
         dest_dir = gr.Textbox(label='保存先フォルダ', placeholder='/path/to/output')
         with gr.Row():
             skip_existing = gr.Checkbox(label='既存ファイルをスキップ', value=True)
